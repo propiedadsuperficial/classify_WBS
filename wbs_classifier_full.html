@@ -1,0 +1,321 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clasificador WBS – Explorar PDFs con IA</title>
+  <style>
+    :root{--bg:#0f172a;--fg:#e2e8f0;--brand:#16a34a;--muted:#94a3b8;--err:#ef4444}
+    html,body{height:100%;margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif;background:#0b1220;color:var(--fg)}
+    header{display:flex;gap:12px;align-items:center;padding:10px 14px;background:var(--bg);border-bottom:1px solid #0b1020;position:sticky;top:0;z-index:10}
+    .dot{width:10px;height:10px;border-radius:50%;background:var(--brand);display:inline-block}
+    h1{font-size:16px;margin:0 8px 0 0}
+    .card{background:#0b1428;border:1px solid #13203b;border-radius:10px;padding:12px}
+    main{display:grid;grid-template-columns:360px 1fr;gap:14px;padding:14px}
+    @media (max-width:960px){main{grid-template-columns:1fr}}
+    label{display:block;font-weight:600;margin:8px 0 4px}
+    input[type=text],input[type=password],textarea,select{width:100%;padding:8px 10px;background:#0b172e;border:1px solid #203355;border-radius:8px;color:var(--fg)}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    button{background:#16a34a;color:white;border:none;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer}
+    button.secondary{background:#334155}
+    button.ghost{background:transparent;border:1px solid #334155}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    small{color:var(--muted)}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #142444;padding:6px 8px;text-align:left;font-size:13px}
+    th{color:#cbd5e1}
+    .ok{color:#22c55e}
+    .bad{color:#ef4444}
+    .warn{color:#eab308}
+    .pill{display:inline-flex;gap:6px;align-items:center;border:1px solid #1f2f54;background:#0c1a33;border-radius:999px;padding:3px 8px;font-size:12px;color:#93c5fd}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
+    #log{white-space:pre-wrap;font-family:ui-monospace,Consolas,monospace;background:#0a1222;border:1px solid #182850;border-radius:8px;padding:10px;max-height:220px;overflow:auto}
+    .banner{display:none;background:#7c3aed;padding:8px 12px;border-radius:8px}
+  </style>
+  <!-- PDF.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js';</script>
+  <!-- SheetJS para generar Excel local (fallback si no hay Graph) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+  <header>
+    <span class="dot"></span>
+    <h1>Clasificador WBS</h1>
+    <span class="pill">Explora PDFs ➜ extrae texto ➜ IA clasifica ➜ escribe en Excel</span>
+  </header>
+  <main>
+    <section class="card">
+      <h2 style="margin:0 0 6px 0">1) Origen de archivos</h2>
+      <div class="row" style="margin-bottom:8px">
+        <input type="file" id="dirPicker" webkitdirectory directory multiple />
+        <button class="secondary" id="btnScan">Escanear PDFs</button>
+      </div>
+      <div id="stats"><small>0 archivos listados</small></div>
+      <hr style="border-color:#14203b"/>
+      <h2 style="margin:0 0 6px 0">2) Configuración IA</h2>
+      <label for="model">Proveedor</label>
+      <select id="provider">
+        <option value="anthropic">Anthropic Claude</option>
+        <option value="azureopenai">Azure OpenAI</option>
+      </select>
+      <div id="anthropicBlock">
+        <label>API Key (ANTHROPIC_API_KEY)</label>
+        <input type="password" id="anthropicKey" placeholder="sk-ant-..." />
+        <label>Modelo</label>
+        <input type="text" id="anthropicModel" value="claude-3-5-sonnet-20240620" />
+      </div>
+      <div id="azureBlock" style="display:none">
+        <label>Endpoint Azure OpenAI</label>
+        <input type="text" id="aoaiEndpoint" placeholder="https://TU-RECURSO.openai.azure.com" />
+        <label>Deployment (modelo)</label>
+        <input type="text" id="aoaiDeployment" placeholder="gpt-4o" />
+        <label>API Key</label>
+        <input type="password" id="aoaiKey" placeholder="AZURE_OPENAI_KEY" />
+        <small>Usa la API de chat completions 2024-xx-xx</small>
+      </div>
+      <hr style="border-color:#14203b"/>
+      <h2 style="margin:0 0 6px 0">3) Destino Excel</h2>
+      <details open>
+        <summary><b>Opción A — Microsoft 365 (recomendado)</b>: Excel en OneDrive/SharePoint mediante Microsoft Graph</summary>
+        <div style="margin-top:6px">
+          <label>URL del archivo (OneDrive/SharePoint)</label>
+          <input type="text" id="xlsxUrl" placeholder="https://{tenant}.sharepoint.com/:x:/r/sites/.../WBS_Basilica_del_Salvador_Planilla.xlsx" />
+          <label>Access Token (Bearer) — pégalo desde MSAL/Graph Explorer</label>
+          <input type="password" id="graphToken" placeholder="eyJ0eXAiOiJKV1QiLCJub2..." />
+          <small>La tabla de salida debe llamarse <b>tblDocumentos</b> en la hoja "Documentos".</small>
+        </div>
+      </details>
+      <details>
+        <summary><b>Opción B — Archivo local</b>: Generar nuevo XLSX para descargar</summary>
+        <div style="margin-top:6px"><small>Se construye un libro con hojas <b>Documentos</b> y <b>Log</b>.</small></div>
+      </details>
+      <hr style="border-color:#14203b"/>
+      <div class="row">
+        <button id="btnClassify">➜ Ejecutar clasificación</button>
+        <button class="ghost" id="btnDownload" disabled>Descargar XLSX</button>
+      </div>
+      <p class="banner" id="warnStorage">⚠️ El navegador está bloqueando almacenamiento/cookies. La sesión de IA/Graph no persistirá.</p>
+    </section>
+    <section class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">Archivos</h2>
+        <span id="selArea" class="pill">Área: <b>general</b></span>
+      </div>
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Archivo</th>
+            <th>Ruta</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <h3 style="margin-top:12px">Log</h3>
+      <div id="log"></div>
+    </section>
+  </main>
+
+  <script>
+    // --- Utilidades UI ---
+    const $$ = sel => document.querySelector(sel);
+    const logEl = $$('#log');
+    const tblBody = document.querySelector('#tbl tbody');
+    const files = []; // {file, name, path}
+    function log(msg, cls=''){ const p=document.createElement('div'); p.textContent=msg; if(cls) p.className=cls; logEl.appendChild(p); logEl.scrollTop=logEl.scrollHeight; }
+
+    // --- Detección de storage bloqueado ---
+    (async () => {
+      let blocked=false;
+      try {
+        if (typeof indexedDB?.databases === 'function') await indexedDB.databases();
+        else await new Promise((res,rej)=>{const r=indexedDB.open('_probe_'); r.onsuccess=()=>{r.result.close();res()}; r.onerror=rej});
+      } catch(e){ blocked=true; }
+      if (blocked) $$('#warnStorage').style.display='block';
+    })();
+
+    // --- Proveedor IA selector ---
+    const providerSel = $$('#provider');
+    function updateProvider(){
+      const v = providerSel.value;
+      $$('#anthropicBlock').style.display = (v==='anthropic')?'block':'none';
+      $$('#azureBlock').style.display     = (v==='azureopenai')?'block':'none';
+    }
+    providerSel.addEventListener('change', updateProvider); updateProvider();
+
+    // --- Escaneo de PDFs ---
+    $$('#btnScan').addEventListener('click', () => {
+      const input = $$('#dirPicker');
+      const list = Array.from(input.files||[]);
+      files.length = 0; tblBody.innerHTML='';
+      let i=0; for (const f of list){ if (f.type==='application/pdf' || f.name.toLowerCase().endsWith('.pdf')){
+        files.push({file:f, name:f.name, path:f.webkitRelativePath||f.name});
+        const tr=document.createElement('tr'); tr.innerHTML=`<td>${++i}</td><td>${f.name}</td><td class="mono">${f.webkitRelativePath||''}</td><td class="muted">pendiente</td>`; tblBody.appendChild(tr);
+      }}
+      $$('#stats').innerHTML = `<small>${files.length} PDF(s) listados</small>`;
+      log(`🔎 ${files.length} PDFs listados`);
+    });
+
+    // --- Extraer texto con PDF.js ---
+    async function extractTextFromPDF(file){
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({data:buf}).promise;
+      let text='';
+      for (let p=1;p<=pdf.numPages;p++){
+        const page = await pdf.getPage(p);
+        const content = await page.getTextContent();
+        text += content.items.map(it=>it.str).join(' ') + '\n';
+      }
+      return text;
+    }
+
+    // --- Parse por nombre según nomenclatura [WBS]-[Disciplina]-[Tipo]-[Secuencia]-[Version]-[AAAAMMDD]-[Siglas] ---
+    function parseFilename(name){
+      const m = name.replace(/\.pdf$/i,'').split('-');
+      const out = { wbs:null, disciplina:null, tipo:null, secuencia:null, version:null, fecha:null, siglas:null };
+      if (m.length >= 7){
+        [out.wbs,out.disciplina,out.tipo,out.secuencia,out.version,out.fecha,out.siglas] = m.slice(0,7);
+      }
+      return out;
+    }
+
+    // --- Llamadas IA ---
+    async function classifyWithAnthropic(text, filename){
+      const key = $$('#anthropicKey').value.trim();
+      const model = $$('#anthropicModel').value.trim();
+      if(!key) throw new Error('Falta ANTHROPIC_API_KEY');
+      const sys = `Eres un asistente que clasifica documentos de un proyecto en base a una WBS.
+      Devuelve un JSON con estas claves exactas: {"CodigoWBS","Disciplina","TipoEntregable","CodigoDocumento","Titulo","Version","Estado","Responsable","Fecha","Ruta","PalabrasClave","Confidencialidad","Aprobador","Observaciones"}.
+      Si falta algún dato, deja cadena vacía. Considera la nomenclatura de nombre de archivo: [WBS]-[Disciplina]-[Tipo]-[Secuencia]-[Version]-[AAAAMMDD]-[Siglas].`;
+      const user = `Archivo: ${filename}\nContenido (primeras ~4000 palabras):\n${text.slice(0,32000)}`;
+      const resp = await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01'},
+        body:JSON.stringify({model, max_tokens:800, system:sys, messages:[{role:'user', content:user}]})
+      });
+      if(!resp.ok) throw new Error('Anthropic API error: '+resp.status);
+      const data = await resp.json();
+      const content = data.content?.[0]?.text || '{}';
+      return JSON.parse(content);
+    }
+
+    async function classifyWithAzure(text, filename){
+      const endpoint = $$('#aoaiEndpoint').value.trim().replace(/\/$/,'');
+      const deployment = $$('#aoaiDeployment').value.trim();
+      const key = $$('#aoaiKey').value.trim();
+      if(!endpoint||!deployment||!key) throw new Error('Falta configuración de Azure OpenAI');
+      const sys = `Eres un asistente que clasifica documentos de un proyecto en base a una WBS.
+      Devuelve un JSON con estas claves exactas: {"CodigoWBS","Disciplina","TipoEntregable","CodigoDocumento","Titulo","Version","Estado","Responsable","Fecha","Ruta","PalabrasClave","Confidencialidad","Aprobador","Observaciones"}.`;
+      const user = `Archivo: ${filename}\nContenido (primeras ~4000 palabras):\n${text.slice(0,16000)}`;
+      const url = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=2024-06-01`;
+      const resp = await fetch(url,{
+        method:'POST', headers:{'content-type':'application/json','api-key':key},
+        body:JSON.stringify({messages:[{role:'system',content:sys},{role:'user',content:user}], temperature:0.2, max_tokens:800})
+      });
+      if(!resp.ok) throw new Error('Azure OpenAI error: '+resp.status);
+      const data = await resp.json();
+      const txt = data.choices?.[0]?.message?.content || '{}';
+      return JSON.parse(txt);
+    }
+
+    // --- Escritura a Excel en la nube (Microsoft Graph) ---
+    async function addRowsGraph(rows){
+      const token = $$('#graphToken').value.trim();
+      const url = $$('#xlsxUrl').value.trim();
+      if(!token||!url) throw new Error('Falta token Graph o URL del archivo');
+      // Convertir URL a "driveItem" mediante /shares endpoint (link compartido)
+      const shareUrl = 'u!'+btoa(unescape(encodeURIComponent(url))).replace(/=+$/,'').replace(/\//g,'_').replace(/\+/g,'-');
+      const itemUrl = `https://graph.microsoft.com/v1.0/shares/${shareUrl}/driveItem`;
+      const item = await fetch(itemUrl,{headers:{Authorization:'Bearer '+token}}).then(r=>r.json());
+      if(!item?.id) throw new Error('No se pudo resolver driveItem desde la URL');
+      // Agregar filas a la tabla "tblDocumentos"
+      const addUrl = `https://graph.microsoft.com/v1.0/drives/${item.parentReference.driveId}/items/${item.id}/workbook/tables/tblDocumentos/rows/add`;
+      const values = rows.map(r => [
+        r.NombreArchivo, r.CodigoWBS, r.Disciplina, r.TipoEntregable, r.CodigoDocumento,
+        r.Titulo, r.Version, r.Estado, r.Responsable, r.Fecha, r.Ruta, r.PalabrasClave,
+        r.Confidencialidad, r.Aprobador, r.Observaciones
+      ]);
+      const resp = await fetch(addUrl,{method:'POST', headers:{'content-type':'application/json', Authorization:'Bearer '+token}, body:JSON.stringify({values})});
+      if(!resp.ok) throw new Error('Graph rows/add error: '+resp.status+' '+await resp.text());
+      return true;
+    }
+
+    // --- Generar XLSX local ---
+    function downloadXlsx(rows){
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, 'Documentos');
+      const logSheet = XLSX.utils.aoa_to_sheet([[new Date().toISOString(),'Generado por Clasificador WBS']]);
+      XLSX.utils.book_append_sheet(wb, logSheet, 'Log');
+      XLSX.writeFile(wb, 'clasificacion_wbs.xlsx');
+    }
+
+    // --- Flujo principal ---
+    $$('#btnClassify').addEventListener('click', async () => {
+      if(files.length===0){ alert('Primero escanea los PDFs'); return; }
+      const prov = $$('#provider').value;
+      $$('#btnClassify').disabled = true;
+      const outRows = [];
+      for (let i=0;i<files.length;i++){
+        const f = files[i];
+        const rowEl = tblBody.children[i]?.lastElementChild; // TD estado
+        try{
+          rowEl.textContent = 'Extrayendo texto…';
+          const txt = await extractTextFromPDF(f.file);
+          rowEl.textContent = 'Clasificando…';
+          const parsed = parseFilename(f.name);
+          let cls = (prov==='anthropic')
+            ? await classifyWithAnthropic(txt, f.name)
+            : await classifyWithAzure(txt, f.name);
+          // Construir fila con columnas esperadas por tu hoja "Documentos"
+          const registro = {
+            NombreArchivo: f.name,
+            CodigoWBS: cls.CodigoWBS || parsed.wbs || '',
+            Disciplina: cls.Disciplina || parsed.disciplina || '',
+            TipoEntregable: cls.TipoEntregable || parsed.tipo || '',
+            CodigoDocumento: cls.CodigoDocumento || '',
+            Titulo: cls.Titulo || '',
+            Version: cls.Version || parsed.version || '',
+            Estado: cls.Estado || 'Borrador',
+            Responsable: cls.Responsable || '',
+            Fecha: cls.Fecha || parsed.fecha || '',
+            Ruta: f.path || '',
+            PalabrasClave: cls.PalabrasClave || '',
+            Confidencialidad: cls.Confidencialidad || '',
+            Aprobador: cls.Aprobador || '',
+            Observaciones: cls.Observaciones || ''
+          };
+          outRows.push(registro);
+          rowEl.innerHTML = '<span class="ok">✔ Clasificado</span>';
+          log(`✔ ${f.name} clasificado`);
+        }catch(e){
+          rowEl.innerHTML = '<span class="bad">✖ Error</span>';
+          log(`✖ ${f.name}: ${e.message}`,'bad');
+        }
+      }
+      // Guardado
+      try{
+        if ($$('#graphToken').value.trim() && $$('#xlsxUrl').value.trim()){
+          log('⤴ Subiendo filas a Excel (Graph)…');
+          await addRowsGraph(outRows);
+          log('✔ Filas agregadas a tblDocumentos');
+        } else {
+          downloadXlsx(outRows);
+          $$('#btnDownload').disabled=false;
+          log('⬇ Archivo XLSX generado para descarga');
+        }
+      }catch(e){
+        log('✖ Error guardando en Excel (Graph): '+e.message,'bad');
+        log('➡ Se generará XLSX local como fallback');
+        downloadXlsx(outRows);
+        $$('#btnDownload').disabled=false;
+      }
+      $$('#btnClassify').disabled = false;
+    });
+
+  </script>
+</body>
+</html>
